@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
-import { generaSlotGiornata, toLocalDateString, type OrarioLavorativo } from '@/utils/slots'
+import { generaSlotGiornata, toLocalDateString, SERVIZI, type OrarioLavorativo } from '@/utils/slots'
 import type { User } from '@supabase/supabase-js'
 
 interface ProfiloUtente {
@@ -30,7 +30,7 @@ interface GiornoCalendario {
   labelNumero: string
 }
 
-const SERVIZI = ['Taglio', 'Taglio + Barba', 'Barba']
+const MAX_PRENOTAZIONI_ATTIVE = 1
 
 function calcolaProssimiGiorni(oggi: Date): GiornoCalendario[] {
   const lista: GiornoCalendario[] = []
@@ -76,7 +76,7 @@ export default function Home() {
     const oraCorrente = new Date()
     const oggiIso = toLocalDateString(oraCorrente)
     const giorni = calcolaProssimiGiorni(oraCorrente)
-
+  
     setProssimiGiorni(giorni)
     setAdesso({
       oggiIso,
@@ -89,11 +89,11 @@ export default function Home() {
 
     const [{ data: orari }, { data: chiusi }] = await Promise.all([
       supabase.from('orari_lavorativi').select('*'),
-      supabase.from('giorni_chiusi').select('data').gte('data', oggiIso),
+      supabase.from('giorni_chiusi').select('data_chiusura').gte('data_chiusura', oggiIso),
     ])
 
     const listaOrari = (orari as OrarioLavorativo[]) || []
-    const listaChiusi = (chiusi || []).map((c: { data: string }) => c.data)
+    const listaChiusi = (chiusi || []).map((c: { data_chiusura: string }) => c.data_chiusura)
     setOrariSettimana(listaOrari)
     setGiorniChiusi(listaChiusi)
 
@@ -135,7 +135,15 @@ export default function Home() {
 
     setLoading(false)
   }, [supabase])
-
+  
+  useEffect(() => {
+    const onFocus = () => {
+      caricaDatiIniziali()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [caricaDatiIniziali])
+  
   useEffect(() => {
     caricaDatiIniziali()
   }, [caricaDatiIniziali])
@@ -176,6 +184,15 @@ export default function Home() {
       }
     })
   }, [dataSelezionata, adesso, giorniChiusi, prossimiGiorni, orariSettimana, slotOccupati])
+  
+  useEffect(() => {
+    if (
+      oraSelezionata &&
+      !slotDisponibili.some((s) => s.inizio === oraSelezionata && s.disponibile)
+    ) {
+      setOraSelezionata('')
+    }
+  }, [oraSelezionata, slotDisponibili])
 
   const handleLoginGoogle = async () => {
     await supabase.auth.signInWithOAuth({
@@ -235,8 +252,21 @@ export default function Home() {
     e.preventDefault()
     if (!user || !profilo?.telefono || !dataSelezionata || !oraSelezionata) return
 
-    const slotScelto = slotDisponibili.find((s) => s.inizio === oraSelezionata)
-    if (!slotScelto) return
+    const isAdmin = profilo.ruolo === 'barbiere' || profilo.ruolo === 'admin'
+    if (!isAdmin && mieiAppuntamenti.length >= MAX_PRENOTAZIONI_ATTIVE) {
+      setFeedback({
+        tipo: 'err',
+        testo: 'Hai già una prenotazione attiva. Annullala prima di prenotarne una nuova.',
+      })
+      return
+    }
+
+    const slotScelto = slotDisponibili.find((s) => s.inizio === oraSelezionata && s.disponibile)
+    if (!slotScelto) {
+      setFeedback({ tipo: 'err', testo: 'Questo orario non è più disponibile.' })
+      setOraSelezionata('')
+      return
+    }
 
     setInvioInCorso(true)
     setFeedback(null)
@@ -307,6 +337,8 @@ export default function Home() {
   }
 
   const profiloIncompleto = Boolean(user && profilo && !profilo.telefono)
+  const isAdmin = profilo?.ruolo === 'barbiere' || profilo?.ruolo === 'admin'
+  const bloccoLimiteRaggiunto = !isAdmin && mieiAppuntamenti.length >= MAX_PRENOTAZIONI_ATTIVE
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 pb-12">
@@ -318,7 +350,7 @@ export default function Home() {
           </div>
           {user && (
             <div className="flex items-center gap-2">
-              {(profilo?.ruolo === 'barbiere' || profilo?.ruolo === 'admin') && (
+              {isAdmin && (
                 <Link
                   href="/admin"
                   className="text-xs px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-400 font-medium transition"
@@ -448,7 +480,7 @@ export default function Home() {
             {mieiAppuntamenti.length > 0 && (
               <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
-                  I tuoi prossimi appuntamenti
+                  Il tuo prossimo appuntamento
                 </h2>
                 <div className="space-y-2">
                   {mieiAppuntamenti.map((app) => (
@@ -484,6 +516,12 @@ export default function Home() {
               onSubmit={handlePrenota}
               className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-5"
             >
+              {bloccoLimiteRaggiunto && (
+                <div className="p-3 rounded-xl text-xs border bg-amber-950/40 border-amber-700/50 text-amber-200">
+                  Hai già una prenotazione attiva. Per prenotare un altro giorno o orario, annulla prima quella attuale.
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
                   1. Scegli il servizio
@@ -540,7 +578,7 @@ export default function Home() {
 
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                  3. Orari disponibili (slot 45 min)
+                  3. Orari disponibili (slot 35 min)
                 </label>
                 {slotDisponibili.length === 0 ? (
                   <p className="text-sm text-zinc-500">Nessuno slot disponibile per questa data.</p>
@@ -552,10 +590,10 @@ export default function Home() {
                         <button
                           type="button"
                           key={slot.inizio}
-                          disabled={!slot.disponibile}
+                          disabled={!slot.disponibile || bloccoLimiteRaggiunto}
                           onClick={() => setOraSelezionata(slot.inizio)}
                           className={`py-2.5 rounded-xl text-sm font-medium border transition ${
-                            !slot.disponibile
+                            !slot.disponibile || bloccoLimiteRaggiunto
                               ? 'bg-zinc-950/40 border-zinc-900 text-zinc-600 line-through cursor-not-allowed'
                               : attivo
                               ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
@@ -584,11 +622,13 @@ export default function Home() {
 
               <button
                 type="submit"
-                disabled={!oraSelezionata || invioInCorso}
+                disabled={!oraSelezionata || invioInCorso || bloccoLimiteRaggiunto}
                 className="w-full py-3.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 font-bold text-sm transition"
               >
                 {invioInCorso
                   ? 'Conferma in corso...'
+                  : bloccoLimiteRaggiunto
+                  ? 'Hai già una prenotazione attiva'
                   : oraSelezionata
                   ? `Conferma alle ${oraSelezionata}`
                   : 'Seleziona un orario'}

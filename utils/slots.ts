@@ -13,6 +13,8 @@ export interface SlotOrario {
   fine: string
 }
 
+export const SERVIZI = ['Taglio', 'Taglio + Barba', 'Barba']
+
 function toMinuti(ora: string): number {
   const [hh, mm] = ora.slice(0, 5).split(':').map(Number)
   return hh * 60 + mm
@@ -65,4 +67,11 @@ export function toLocalDateString(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, '0')
   const d = String(date.getDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
+}
+
+export function formatWhatsAppUrl(telefono: string, testo?: string): string {
+  const cifre = telefono.replace(/\D/g, '')
+  const numero = cifre.startsWith('39') ? cifre : `39${cifre}`
+  const query = testo ? `?text=${encodeURIComponent(testo)}` : ''
+  return `https://wa.me/${numero}${query}`
 }
